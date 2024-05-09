@@ -142,13 +142,46 @@ Resources:
           FromPort: '22'
           ToPort: '22'
           CidrIp: '0.0.0.0/0'
+  SpotFleetRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Name: !Join [ '-', [ !Ref Stack, 'spot-fleet-role' ] ]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'spotfleet.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: !Join [ '-', [ !Ref Stack, 'spot-fleet-role', 'root-policy' ] ]
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:DescribeInstanceStatus'
+                  - 'ec2:DescribeSpotInstanceRequests'
+                  - 'ec2:DescribeSpotFleetRequests'
+                  - 'ec2:CancelSpotInstanceRequests'
+                  - 'ec2:CancelSpotFleetRequests'
+                  - 'ec2:RequestSpotInstances'
+                  - 'ec2:ModifySpotFleetRequest'
+                  - 'ec2:ModifySpotInstanceRequest'
+                  - 'ec2:TerminateInstances'
+                  - 'ec2:StopInstances'
+                  - 'ec2:StartInstances'
+                  - 'ec2:CreateTags'
+                  - 'ec2:DeleteTags'
+                  - 'ec2:DescribeTags'
+                Resource: '*'
 
   SpotInstanceRequest:
     Type: 'AWS::EC2::SpotFleet'
     Properties:
       SpotFleetRequestConfigData:
         IamFleetRole: !GetAtt SpotFleetRole.Arn
-        SpotPrice: '0.03'
         TargetCapacity: 1
         LaunchSpecifications:
           - ImageId: !Ref ImageId

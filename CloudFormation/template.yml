@@ -1,0 +1,170 @@
+# Generate a cloudformation script with a dynamoDB, two lambda, and persistent EC2 spot instance request.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for a DynamoDB, two Lambda, and EC2 spot instance request.'
+Parameters:
+  Key:
+    Type: 'String'
+    Description: 'The key pair to use for the EC2 instance.'
+  Stack:
+    Type: 'String'
+    Description: 'The name of the stack.'
+  InstanceSize: 
+    Type: 'String'
+    Description: 'The size of the EC2 instance.'
+    Default: 'm7g.2xlarge'
+  ImageId:
+    Type: 'String'
+    Description: 'The image ID to use for the EC2 instance.'
+    Default: 'ami-0c55b159cbfafe1f0' # Requires tuning.
+  RunTimeEnv:
+    Type: 'String'
+    Description: 'The runtime environment for the lambda functions.'
+    Default: 'python3.12'
+
+Resources:
+  DynamoDBTable: # OnDemand Dynamo Table
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: !Join [ '-', [ !Ref Stack, 'table' ] ]
+      AttributeDefinitions:
+        - AttributeName: 'InstanceId'
+          AttributeType: 'S'
+      KeySchema:
+        - AttributeName: 'InstanceId'
+          KeyType: 'STRING'
+      CapacityMode: 'PAY_PER_REQUEST'
+
+  StartEC2Lambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'StartEC2.lambda_handler'
+      Role: !GetAtt StartLambdaExecutionRole.Arn
+      Code:
+        S3Bucket: 'my-bucket'
+        S3Key: 'lambda1.zip'
+      Runtime: !Ref RunTimeEnv
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref DynamoDBTable
+  StartEC2FunctionURL:
+    Type: 'AWS::Lambda::Url'
+    Properties:
+      TargetFunctionArn: !GetAtt StartEC2Lambda.Arn
+
+  StopEC2Lambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'StopEC2.lambda_handler'
+      Role: !GetAtt StopLambdaExecutionRole.Arn
+      Code:
+        S3Bucket: 'my-bucket'
+        S3Key: 'lambda2.zip'
+      Runtime: !Ref RunTimeEnv
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref DynamoDBTable
+
+  StartLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'root'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: 'Allow'
+                Action:
+                  - 'dynamo:Scan'
+                Resource: !Ref DynamoDBTable
+              - Effect: 'Allow'
+                Action:
+                - 'ec2:StartInstances'
+                - 'ec2:DescribeInstances'
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/Name: !Join [ '-', [ !Ref Stack, 'instance' ] ]
+
+  StopLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'root'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: 'Allow'
+                Action:
+                  - 'dynamo:PutItem'
+                Resource: !Ref DynamoDBTable
+              - Effect: 'Allow'
+                Action:
+                - 'ec2:StopInstances'
+                - 'ec2:DescribeInstances'
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/Name: !Join [ '-', [ !Ref Stack, 'instance' ] ]
+
+  SpotInstanceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Enable SSH access via port 22'
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: '0.0.0.0/0'
+
+  SpotInstanceRequest:
+    Type: 'AWS::EC2::SpotFleet'
+    Properties:
+      SpotFleetRequestConfigData:
+        IamFleetRole: !GetAtt SpotFleetRole.Arn
+        SpotPrice: '0.03'
+        TargetCapacity: 1
+        LaunchSpecifications:
+          - ImageId: !Ref ImageId
+            InstanceType: !Ref InstanceSize
+            SecurityGroups:
+              - !Ref SpotInstanceSecurityGroup
+            UserData:
+              Fn::Base64: !Sub |
+                #!/bin/bash
+                echo "Hello
+      TagSpecifications:
+        - ResourceType: 'instance'
+          Tags:
+            - Key: 'Name'
+              Value: !Join [ '-', [ !Ref Stack, 'instance' ] ]
+  KeyPair:
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    PublicKeyMaterial: !Ref Key
+    KeyName: !Join [ '-', [ !Ref Stack, 'key' ] ]

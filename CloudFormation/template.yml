@@ -233,3 +233,55 @@ Resources:
     Properties:
       PublicKeyMaterial: !Ref Key
       KeyName: !Join [ '', [ !Ref Stack, 'Key' ] ]
+
+
+# Refer Here
+# Parameters:
+#   LatestAmiId:
+#     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+#     Default: /aws/service/ami-amazon-linux-latest/amzn-ami-hvm-x86_64-ebs
+#   OksoftSG:
+#     Type: 'AWS::EC2::SecurityGroup::Id'
+#   KeyName:
+#     Type: 'AWS::EC2::KeyPair::KeyName'
+#   MyInstanceType:
+#     Type: String
+#     Default: m3.medium
+#     AllowedValues:
+#       - t2.small
+#       - m3.medium
+#       - m3.xlarge
+#       - m3.2xlarge
+#       - i3.xlarge
+#   MyIpAddress:
+#     Type: String
+ 
+# Resources:
+
+#   SpotPersistantLaunchTemplate:
+#     Type: AWS::EC2::LaunchTemplate
+#     Properties:  
+#       LaunchTemplateData:
+#         InstanceType: !Ref MyInstanceType
+#         ImageId: !Ref LatestAmiId
+#         SecurityGroupIds:
+#           - !Ref OksoftSG
+#         KeyName: !Ref KeyName
+#         InstanceMarketOptions:
+#           MarketType: spot
+#           SpotOptions:
+#             InstanceInterruptionBehavior: stop
+#             SpotInstanceType: persistent
+#         BlockDeviceMappings:
+#           - DeviceName: /dev/xvda
+#             Ebs:
+#               DeleteOnTermination: true
+#               VolumeType: standard
+#               VolumeSize: 400
+
+#   MyPersistantSpotInstance:
+#     Type: AWS::EC2::Instance    
+#     Properties:
+#       LaunchTemplate:
+#         LaunchTemplateId: !Ref SpotPersistantLaunchTemplate
+#         Version: 1

@@ -13,7 +13,11 @@ Parameters:
   InstanceSize: 
     Type: 'String'
     Description: 'The size of the EC2 instance.'
-    Default: 'm7g.2xlarge'
+    Default: 'm7g.xlarge'
+    AllowedValues:
+      - 'm7g.xlarge'
+      - 'm7g.2xlarge'
+      - 'm7g.4xlarge'
   ImageId:
     Type: 'String'
     Description: 'The image ID to use for the EC2 instance.'
@@ -22,6 +26,15 @@ Parameters:
     Type: 'String'
     Description: 'The runtime environment for the lambda functions.'
     Default: 'python3.12'
+  VolumeSize:
+    Type: 'Number'
+    Default: 250
+  Timezone:
+    Type: 'String'
+    Default: 'Australia/Perth'
+  CronExpression:
+    Type: 'String'
+    Default: 'cron(30 17 ? * * *)'
 
 Resources:
   DynamoDBTable: # OnDemand Dynamo Table
@@ -138,6 +151,39 @@ Resources:
                   StringEquals:
                     ec2:ResourceTag/Name: !Join [ '', [ !Ref Stack, 'Instance' ] ]
 
+  StopLambdaEventSchedulerRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join [ '', [ !Ref Stack, 'StopLambdaEventSchedulerRole' ] ]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'scheduler.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'root'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource: !GetAtt StopEC2Lambda.Arn
+
+  StopLambdaEventScheduler:
+    Type: 'AWS::Scheduler::Schedule'
+    Properties:
+      ScheduleExpression: !Ref CronExpression
+      ScheduleExpressionTimezone: !Ref Timezone
+      State: 'ENABLED'
+      FlexibleTimeWindow: 
+        Mode: 'OFF'
+      Target:
+          Arn: !GetAtt StopEC2Lambda.Arn
+          RoleArn: !GetAtt StopLambdaEventSchedulerRole.Arn
+
   SpotInstanceSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
@@ -178,110 +224,64 @@ Resources:
                   StringEquals:
                     iam:TagKeys: !Join [ '', [ !Ref Stack, 'Allowed' ] ]
 
-  SpotFleetRole:
-    Type: 'AWS::IAM::Role'
+  EC2InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
     Properties:
-      RoleName: !Join [ '', [ !Ref Stack, 'SpotFleetRole' ] ]
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: 'Allow'
-            Principal:
-              Service: 'spotfleet.amazonaws.com'
-            Action: 'sts:AssumeRole'
-      Policies:
-        - PolicyName: !Join [ '', [ !Ref Stack, 'SpotFleetRole', 'RootPolicy' ] ]
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: 'Allow'
-                Action:
-                  - 'ec2:Describe*'
-                  - 'ec2:CancelSpotInstanceRequests'
-                  - 'ec2:CancelSpotFleetRequests'
-                  - 'ec2:RequestSpotInstances'
-                  - 'ec2:ModifySpotFleetRequest'
-                  - 'ec2:ModifySpotInstanceRequest'
-                  - 'ec2:TerminateInstances'
-                  - 'ec2:StopInstances'
-                  - 'ec2:StartInstances'
-                  - 'ec2:CreateTags'
-                  - 'ec2:DeleteTags'
-                Resource: '*'
+      InstanceProfileName: !Join [ '', [ !Ref Stack, 'InstanceProfile' ] ]
+      Roles:
+        - !Ref EC2InstanceProfileRole
 
-  SpotInstanceRequest:
-    Type: 'AWS::EC2::SpotFleet' # Needs to be changed to a launch template and generate an EC2 instance with SpotInstanceType: Persistent
-    Properties:
-      SpotFleetRequestConfigData:
-        IamFleetRole: !GetAtt SpotFleetRole.Arn
-        TargetCapacity: 1
-        LaunchSpecifications:
-          - ImageId: !Ref ImageId
-            InstanceType: !Ref InstanceSize
-            IamInstanceProfile:
-              Arn: !GetAtt EC2InstanceProfileRole.Arn
-            SecurityGroups:
-              - GroupId: !GetAtt SpotInstanceSecurityGroup.GroupId
-            KeyName: !Join [ '', [ !Ref Stack, 'Key' ] ]
-            TagSpecifications:
-              - ResourceType: 'instance'
-                Tags:
-                  - Key: 'Name'
-                    Value: !Join [ '', [ !Ref Stack, 'Instance' ] ]
   KeyPair:
     Type: 'AWS::EC2::KeyPair'
     Properties:
       PublicKeyMaterial: !Ref Key
       KeyName: !Join [ '', [ !Ref Stack, 'Key' ] ]
 
+  SpotPersistantLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceSize
+        ImageId: !Ref ImageId
+        SecurityGroupIds:
+          - !GetAtt SpotInstanceSecurityGroup.GroupId
+        KeyName: !Join [ '', [ !Ref Stack, 'Key' ] ]
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            InstanceInterruptionBehavior: stop
+            SpotInstanceType: persistent
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              DeleteOnTermination: true
+              VolumeType: standard
+              VolumeSize: !Ref VolumeSize
 
-# Refer Here
-# Parameters:
-#   LatestAmiId:
-#     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
-#     Default: /aws/service/ami-amazon-linux-latest/amzn-ami-hvm-x86_64-ebs
-#   OksoftSG:
-#     Type: 'AWS::EC2::SecurityGroup::Id'
-#   KeyName:
-#     Type: 'AWS::EC2::KeyPair::KeyName'
-#   MyInstanceType:
-#     Type: String
-#     Default: m3.medium
-#     AllowedValues:
-#       - t2.small
-#       - m3.medium
-#       - m3.xlarge
-#       - m3.2xlarge
-#       - i3.xlarge
-#   MyIpAddress:
-#     Type: String
- 
-# Resources:
+  PersistantSpotInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      LaunchTemplate:
+        LaunchTemplateId: !Ref SpotPersistantLaunchTemplate
+        Version: 1
+      Tags:
+        - Key: 'Name'
+          Value: !Join [ '', [ !Ref Stack, 'Instance' ] ]
 
-#   SpotPersistantLaunchTemplate:
-#     Type: AWS::EC2::LaunchTemplate
-#     Properties:  
-#       LaunchTemplateData:
-#         InstanceType: !Ref MyInstanceType
-#         ImageId: !Ref LatestAmiId
-#         SecurityGroupIds:
-#           - !Ref OksoftSG
-#         KeyName: !Ref KeyName
-#         InstanceMarketOptions:
-#           MarketType: spot
-#           SpotOptions:
-#             InstanceInterruptionBehavior: stop
-#             SpotInstanceType: persistent
-#         BlockDeviceMappings:
-#           - DeviceName: /dev/xvda
-#             Ebs:
-#               DeleteOnTermination: true
-#               VolumeType: standard
-#               VolumeSize: 400
-
-#   MyPersistantSpotInstance:
-#     Type: AWS::EC2::Instance    
-#     Properties:
-#       LaunchTemplate:
-#         LaunchTemplateId: !Ref SpotPersistantLaunchTemplate
-#         Version: 1
+Outputs:
+  DynamoDBTable:
+    Description: 'The DynamoDB table.'
+    Value: !Ref DynamoDBTable
+  StartEC2Lambda:
+    Description: 'The lambda function to start the EC2 instance.'
+    Value: !GetAtt StartEC2Lambda.Arn
+  StartEC2LambdaUrl:
+    Description: 'The URL to the lambda function to start the EC2 instance.'
+    Value: !GetAtt StartEC2FunctionURL.FunctionUrl
+  StopEC2Lambda:
+    Description: 'The lambda function to stop the EC2 instance.'
+    Value: !GetAtt StopEC2Lambda.Arn
+  SpotInstance:
+    Description: 'The EC2 instance.'
+    Value: !Ref PersistantSpotInstance
